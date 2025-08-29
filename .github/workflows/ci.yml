@@ -40,3 +40,29 @@ jobs:
       - name: Test
         run: cargo test --verbose
 
+  rust-32:
+    name: Rust checks (i686)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: i686-unknown-linux-gnu
+
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y gcc-multilib
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+
+      - name: Build
+        run: cargo build --verbose --target i686-unknown-linux-gnu
+
+      - name: Test
+        run: cargo test --verbose --target i686-unknown-linux-gnu
+
