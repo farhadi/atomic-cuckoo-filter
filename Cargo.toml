@@ -2,6 +2,10 @@
 name = "atomic-cuckoo-filter"
 version = "0.1.0"
 edition = "2024"
+description = "Highly concurrent Cuckoo Filter"
+license = "MIT"
+repository = "https://github.com/farhadi/atomic-cuckoo-filter"
+readme = "README.md"
 
 [dependencies]
 derive_builder = "0.20"
