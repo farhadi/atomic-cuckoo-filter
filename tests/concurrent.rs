@@ -39,7 +39,7 @@ fn test_concurrent_insert() {
         let filter_clone = Arc::clone(&filter);
         handles.push(thread::spawn(move || {
             for i in 0..100 {
-                let item = format!("thread_{}_item_{}", thread_id, i);
+                let item = format!("thread_{thread_id}_item_{i}");
                 filter_clone.insert(&item).unwrap();
             }
         }));
@@ -53,7 +53,7 @@ fn test_concurrent_insert() {
     // check if all items are inserted
     for thread_id in 0..5 {
         for i in 0..100 {
-            let item = format!("thread_{}_item_{}", thread_id, i);
+            let item = format!("thread_{thread_id}_item_{i}");
             assert!(filter.contains(&item));
         }
     }
@@ -118,7 +118,7 @@ fn test_concurrent_insert_and_remove() {
         let filter_clone = Arc::clone(&filter);
         handles.push(thread::spawn(move || {
             for i in 0..100 {
-                let item = format!("thread_{}_item_{}", thread_id, i);
+                let item = format!("thread_{thread_id}_item_{i}");
                 filter_clone.insert(&item).unwrap();
             }
         }));
@@ -129,7 +129,7 @@ fn test_concurrent_insert_and_remove() {
         let filter_clone = Arc::clone(&filter);
         handles.push(thread::spawn(move || {
             for i in 0..100 {
-                let item = format!("thread_{}_item_{}", thread_id, i);
+                let item = format!("thread_{thread_id}_item_{i}");
                 while !filter_clone.remove(&item) {}
             }
         }));

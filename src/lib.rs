@@ -798,10 +798,10 @@ impl Default for CuckooFilter<DefaultHasher> {
 impl<H: Hasher + Default> CuckooFilterBuilder<H> {
     /// Validate the builder configuration
     fn validate(&self) -> Result<(), String> {
-        if let Some(fingerprint_size) = self.fingerprint_size {
-            if ![4, 8, 16, 32].contains(&fingerprint_size) {
-                return Err("Invalid fingerprint_size".into());
-            }
+        if let Some(fingerprint_size) = self.fingerprint_size
+            && ![4, 8, 16, 32].contains(&fingerprint_size)
+        {
+            return Err("Invalid fingerprint_size".into());
         }
         if self.bucket_size == Some(0) {
             return Err("bucket_size must be greater than zero".into());

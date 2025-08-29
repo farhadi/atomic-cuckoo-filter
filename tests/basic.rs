@@ -2,7 +2,7 @@ use ahash::AHasher;
 use atomic_cuckoo_filter::{CuckooFilter, CuckooFilterBuilder};
 // Helper function to create test data
 fn test_items(count: usize) -> Vec<String> {
-    (0..count).map(|i| format!("test_item_{}", i)).collect()
+    (0..count).map(|i| format!("test_item_{i}")).collect()
 }
 
 #[test]
@@ -272,7 +272,7 @@ fn test_no_false_negatives() {
 
     // All inserted items should be found (no false negatives)
     for item in &items {
-        assert!(filter.contains(item), "False negative for item: {}", item);
+        assert!(filter.contains(item), "False negative for item: {item}");
     }
 }
 
@@ -383,11 +383,7 @@ fn test_fingerprint_sizes() {
 
         assert!(
             (fpr - expected_fpr).abs() < tolerance,
-            "Observed FPR ({}) deviates too much from expected FPR ({}) for fingerprint size {} ({} false positives)",
-            fpr,
-            expected_fpr,
-            size,
-            false_positives
+            "Observed FPR ({fpr}) deviates too much from expected FPR ({expected_fpr}) for fingerprint size {size} ({false_positives} false positives)"
         );
     }
 }
