@@ -367,12 +367,10 @@ impl<H: Hasher + Default> CuckooFilter<H> {
         self.atomic_read(
             || {
                 self.read_bucket(index, Ordering::Acquire)
-                    .into_iter()
                     .filter(|&f| f == fingerprint)
                     .count()
                     + self
                         .read_bucket(alt_index, Ordering::Acquire)
-                        .into_iter()
                         .filter(|&f| f == fingerprint)
                         .count()
             },
@@ -495,15 +493,13 @@ impl<H: Hasher + Default> CuckooFilter<H> {
     fn lookup_fingerprint(&self, index: usize, fingerprint: usize) -> Option<(usize, usize)> {
         // First check the primary bucket
         self.read_bucket(index, Ordering::Acquire)
-            .iter()
-            .position(|fp| fp == &fingerprint)
+            .position(|fp| fp == fingerprint)
             .map(|sub_index| (index, sub_index))
             .or_else(|| {
                 // Then check the alternative bucket
                 let alt_index = self.alt_index(index, fingerprint);
                 self.read_bucket(alt_index, Ordering::Acquire)
-                    .iter()
-                    .position(|fp| fp == &fingerprint)
+                    .position(|fp| fp == fingerprint)
                     .map(|sub_index| (alt_index, sub_index))
             })
     }
@@ -520,17 +516,16 @@ impl<H: Hasher + Default> CuckooFilter<H> {
 
     /// Try to insert a fingerprint at a specific index
     /// Returns `Ok(())` if successful, `Err(bucket)` if the bucket is full
-    fn insert_at_index(&self, index: usize, fingerprint: usize) -> Result<(), Vec<usize>> {
+    fn insert_at_index(&self, index: usize, fingerprint: usize) -> Result<(), ()> {
         loop {
-            let bucket = self.read_bucket(index, Ordering::Relaxed);
-            if let Some(sub_index) = bucket.iter().position(|&i| i == 0) {
+            if let Some(sub_index) = self.read_bucket(index, Ordering::Relaxed).position(|i| i == 0) {
                 if self.update_bucket(index, sub_index, 0, fingerprint, Ordering::Release) {
                     return Ok(());
                 } else {
                     continue;
                 }
             } else {
-                return Err(bucket);
+                return Err(());
             }
         }
     }
@@ -568,7 +563,7 @@ impl<H: Hasher + Default> CuckooFilter<H> {
         let mut evictions = Vec::with_capacity(self.max_evictions.min(32));
         let mut used_indices = HashMap::with_capacity(self.max_evictions.min(32));
         while evictions.len() <= self.max_evictions {
-            if let Err(bucket) = self.insert_at_index(index, fingerprint) {
+            if self.insert_at_index(index, fingerprint).is_err() {
                 let sub_index = match used_indices.entry(index).or_insert(0usize) {
                     sub_indices if *sub_indices == 0 => {
                         // First time seeing this index, randomly choose a sub-index
@@ -589,7 +584,8 @@ impl<H: Hasher + Default> CuckooFilter<H> {
                     }
                 };
                 // Evict the fingerprint at the chosen sub-index
-                let evicted = bucket[sub_index];
+                let evicted = self.read_bucket(index, Ordering::Relaxed)
+                    .skip(sub_index).next().unwrap();
                 evictions.push((index, sub_index, fingerprint));
                 // Find the alternative index for the evicted fingerprint
                 index = self.alt_index(index, evicted);
@@ -631,7 +627,7 @@ impl<H: Hasher + Default> CuckooFilter<H> {
     /// intermediate states that get resolved by retry logic).
     ///
     /// Returns a vector containing all fingerprints in the bucket (0 = empty slot)
-    fn read_bucket(&self, index: usize, ordering: Ordering) -> Vec<usize> {
+    fn read_bucket(&self, index: usize, ordering: Ordering) -> impl Iterator<Item=usize> {
         let fingerprint_index = index * self.bucket_size;
         let bit_index = fingerprint_index * self.fingerprint_size;
         let start_index = bit_index / usize::BITS as usize;
@@ -641,7 +637,7 @@ impl<H: Hasher + Default> CuckooFilter<H> {
 
         self.buckets[start_index..end_index]
             .iter()
-            .flat_map(|atomic| {
+            .flat_map(move |atomic| {
                 let atomic_value = atomic.load(ordering);
                 (0..self.fingerprints_per_atomic).map(move |i| {
                     (atomic_value
@@ -651,7 +647,6 @@ impl<H: Hasher + Default> CuckooFilter<H> {
             })
             .skip(skip_fingerprints)
             .take(self.bucket_size)
-            .collect()
     }
 
     /// Atomically update a single fingerprint using lock-free compare-exchange.
