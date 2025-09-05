@@ -507,26 +507,26 @@ impl<H: Hasher + Default> CuckooFilter<H> {
     /// Try to insert a fingerprint at its primary or alternative index
     /// Returns `Ok(())` if successful, `Error::NotEnoughSpace` if both buckets are full
     fn try_insert(&self, index: usize, fingerprint: usize) -> Result<(), Error> {
-        self.insert_at_index(index, fingerprint).or_else(|_| {
+        if !self.insert_at_index(index, fingerprint) {
             let alt_index = self.alt_index(index, fingerprint);
-            self.insert_at_index(alt_index, fingerprint)
-                .map_err(|_| Error::NotEnoughSpace)
-        })
+            if !self.insert_at_index(alt_index, fingerprint) {
+                return Err(Error::NotEnoughSpace);
+            }
+        }
+        Ok(())
     }
 
     /// Try to insert a fingerprint at a specific index
     /// Returns `Ok(())` if successful, `Err(bucket)` if the bucket is full
-    fn insert_at_index(&self, index: usize, fingerprint: usize) -> Result<(), ()> {
+    fn insert_at_index(&self, index: usize, fingerprint: usize) -> bool {
         loop {
             if let Some(sub_index) = self.read_bucket(index, Ordering::Relaxed).position(|i| i == 0) {
                 if self.update_bucket(index, sub_index, 0, fingerprint, Ordering::Release) {
-                    return Ok(());
-                } else {
-                    continue;
+                    return true;
                 }
-            } else {
-                return Err(());
+                continue;
             }
+            return false;
         }
     }
 
@@ -563,7 +563,7 @@ impl<H: Hasher + Default> CuckooFilter<H> {
         let mut evictions = Vec::with_capacity(self.max_evictions.min(32));
         let mut used_indices = HashMap::with_capacity(self.max_evictions.min(32));
         while evictions.len() <= self.max_evictions {
-            if self.insert_at_index(index, fingerprint).is_err() {
+            if !self.insert_at_index(index, fingerprint) {
                 let sub_index = match used_indices.entry(index).or_insert(0usize) {
                     sub_indices if *sub_indices == 0 => {
                         // First time seeing this index, randomly choose a sub-index
