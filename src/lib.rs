@@ -520,7 +520,10 @@ impl<H: Hasher + Default> CuckooFilter<H> {
     /// Returns `Ok(())` if successful, `Err(bucket)` if the bucket is full
     fn insert_at_index(&self, index: usize, fingerprint: usize) -> bool {
         loop {
-            if let Some(sub_index) = self.read_bucket(index, Ordering::Relaxed).position(|i| i == 0) {
+            if let Some(sub_index) = self
+                .read_bucket(index, Ordering::Relaxed)
+                .position(|i| i == 0)
+            {
                 if self.update_bucket(index, sub_index, 0, fingerprint, Ordering::Release) {
                     return true;
                 }
@@ -584,8 +587,11 @@ impl<H: Hasher + Default> CuckooFilter<H> {
                     }
                 };
                 // Evict the fingerprint at the chosen sub-index
-                let evicted = self.read_bucket(index, Ordering::Relaxed)
-                    .skip(sub_index).next().unwrap();
+                let evicted = self
+                    .read_bucket(index, Ordering::Relaxed)
+                    .skip(sub_index)
+                    .next()
+                    .unwrap();
                 evictions.push((index, sub_index, fingerprint));
                 // Find the alternative index for the evicted fingerprint
                 index = self.alt_index(index, evicted);
