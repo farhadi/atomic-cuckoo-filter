@@ -626,8 +626,8 @@ impl<H: Hasher + Default> CuckooFilter<H> {
     /// and reads can proceed even during writes (though they might see
     /// intermediate states that get resolved by retry logic).
     ///
-    /// Returns a vector containing all fingerprints in the bucket (0 = empty slot)
-    fn read_bucket(&self, index: usize, ordering: Ordering) -> impl Iterator<Item=usize> {
+    /// Returns an Iterator over the fingerprints in the bucket, possibly empty.
+    fn read_bucket(&self, index: usize, ordering: Ordering) -> impl Iterator<Item = usize> {
         let fingerprint_index = index * self.bucket_size;
         let bit_index = fingerprint_index * self.fingerprint_size;
         let start_index = bit_index / usize::BITS as usize;
