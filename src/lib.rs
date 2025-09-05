@@ -589,8 +589,7 @@ impl<H: Hasher + Default> CuckooFilter<H> {
                 // Evict the fingerprint at the chosen sub-index
                 let evicted = self
                     .read_bucket(index, Ordering::Relaxed)
-                    .skip(sub_index)
-                    .next()
+                    .nth(sub_index)
                     .unwrap();
                 evictions.push((index, sub_index, fingerprint));
                 // Find the alternative index for the evicted fingerprint
