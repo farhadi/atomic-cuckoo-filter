@@ -4,6 +4,7 @@ A high-performance, lock-free concurrent cuckoo filter implementation in Rust fo
 
 [![Crates.io](https://img.shields.io/crates/v/atomic-cuckoo-filter.svg)](https://crates.io/crates/atomic-cuckoo-filter)
 [![Documentation](https://docs.rs/atomic-cuckoo-filter/badge.svg)](https://docs.rs/atomic-cuckoo-filter)
+[![CI](https://img.shields.io/github/actions/workflow/status/farhadi/atomic-cuckoo-filter/ci.yml?branch=main&style=flat-square&logo=github)](https://github.com/farhadi/atomic-cuckoo-filter/actions)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 ## Overview
@@ -19,7 +20,7 @@ atomic operations and is designed for high-concurrency environments.
 🔍 **No False Negatives**: Items that were inserted are guaranteed to be found  
 🎯 **Controllable False Positives**: Configurable fingerprint size to tune accuracy  
 📦 **Space Efficient**: ~20-30% less memory usage than Bloom filters for the same false positive rate  
-🗑️ **Deletion Support**: Unlike Bloom filters, items can be safely removed  
+🗑️ **Deletion Support**: Unlike Bloom filters, inserted items can be safely removed
 ⏱️ **Bounded Lookup Time**: Always at most 2 bucket checks maximum  
 🔧 **Highly Configurable**: Customizable capacity, fingerprint size, bucket size, and eviction limits  
 
@@ -199,6 +200,44 @@ cargo test
 
 # Benchmarks
 cargo bench
+```
+
+## Benchmarks
+
+- Environment: rustc 1.90.0-nightly (ace633090 2025-07-23), Apple M4 Pro
+- Command: `cargo +nightly bench -- --nocapture`
+
+Basic (single-threaded):
+
+```
+contains_false                          ~ 60.7 ns/iter
+contains_true                           ~ 39.9 ns/iter
+contains_with_max_evictions_0           ~ 32.6 ns/iter
+insert_and_remove                       ~ 171.4 ns/iter
+insert_and_remove_with_max_evictions_0  ~ 106.8 ns/iter
+insert_into_full_filter                 ~ 39.7 µs/iter
+insert_unique                           ~ 40.7 ns/iter
+```
+
+Concurrent (multi-threaded):
+
+```
+concurrent_contains                         ~ 106.7 ns/iter (+/- 79.4)
+concurrent_contains_under_write_contention  ~ 205.6 ns/iter (+/- 23.6)
+```
+
+Comparison suite:
+
+This suite uses the reference [cuckoofilter](https://crates.io/crates/cuckoofilter) crate (dev-dependency `cuckoofilter = "0.5"`) as the baseline for comparison.
+
+```
+concurrent_contains                         ~ 4.23 µs/iter (+/- 8.01)
+concurrent_contains_under_write_contention  ~ 3.19 µs/iter (+/- 0.93)
+contains_false                              ~ 22.3 ns/iter
+contains_true                               ~ 42.1 ns/iter
+insert_and_remove                           ~ 131.3 ns/iter
+insert_into_full_filter                     ~ 26.1 µs/iter
+insert_unique                               ~ 42.5 ns/iter
 ```
 
 ## Safety and Guarantees
