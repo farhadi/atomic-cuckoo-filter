@@ -320,11 +320,8 @@ impl<H: Hasher + Default> CuckooFilter<H> {
     pub fn insert<T: ?Sized + Hash>(&self, item: &T) -> Result<(), Error> {
         let (index, fingerprint) = self.index_and_fingerprint(item);
         self.try_insert(index, fingerprint).or_else(|error| {
-            if let Some(lock) = self.lock(LockKind::WriterExclusive) {
-                self.insert_with_evictions(index, fingerprint, lock)
-            } else {
-                Err(error)
-            }
+            let lock = self.lock(LockKind::WriterExclusive).ok_or(error)?;
+            self.insert_with_evictions(index, fingerprint, lock)
         })
     }
 
@@ -507,29 +504,26 @@ impl<H: Hasher + Default> CuckooFilter<H> {
     /// Try to insert a fingerprint at its primary or alternative index
     /// Returns `Ok(())` if successful, `Error::NotEnoughSpace` if both buckets are full
     fn try_insert(&self, index: usize, fingerprint: usize) -> Result<(), Error> {
-        if !self.insert_at_index(index, fingerprint) {
+        self.insert_at_index(index, fingerprint).or_else(|_| {
             let alt_index = self.alt_index(index, fingerprint);
-            if !self.insert_at_index(alt_index, fingerprint) {
-                return Err(Error::NotEnoughSpace);
-            }
-        }
-        Ok(())
+            self.insert_at_index(alt_index, fingerprint)
+        })
     }
 
     /// Try to insert a fingerprint at a specific index
-    /// Returns `Ok(())` if successful, `Err(bucket)` if the bucket is full
-    fn insert_at_index(&self, index: usize, fingerprint: usize) -> bool {
+    /// Returns Ok(()) if successful, Err(Error::NotEnoughSpace) if the bucket is full
+    fn insert_at_index(&self, index: usize, fingerprint: usize) -> Result<(), Error> {
         loop {
-            if let Some(sub_index) = self
+            let Some(sub_index) = self
                 .read_bucket(index, Ordering::Relaxed)
                 .position(|i| i == 0)
-            {
-                if self.update_bucket(index, sub_index, 0, fingerprint, Ordering::Release) {
-                    return true;
-                }
-                continue;
+            else {
+                return Err(Error::NotEnoughSpace);
+            };
+
+            if self.update_bucket(index, sub_index, 0, fingerprint, Ordering::Release) {
+                return Ok(());
             }
-            return false;
         }
     }
 
@@ -566,36 +560,7 @@ impl<H: Hasher + Default> CuckooFilter<H> {
         let mut evictions = Vec::with_capacity(self.max_evictions.min(32));
         let mut used_indices = HashMap::with_capacity(self.max_evictions.min(32));
         while evictions.len() <= self.max_evictions {
-            if !self.insert_at_index(index, fingerprint) {
-                let sub_index = match used_indices.entry(index).or_insert(0usize) {
-                    sub_indices if *sub_indices == 0 => {
-                        // First time seeing this index, randomly choose a sub-index
-                        let sub_index = rng.random_range(0..self.bucket_size);
-                        *sub_indices = 1 << sub_index;
-                        sub_index
-                    }
-                    sub_indices => {
-                        // Find an unused sub-index
-                        if let Some(sub_index) =
-                            (0..self.bucket_size).find(|shift| (*sub_indices >> shift) & 1 == 0)
-                        {
-                            *sub_indices |= 1 << sub_index;
-                            sub_index
-                        } else {
-                            return Err(Error::NotEnoughSpace);
-                        }
-                    }
-                };
-                // Evict the fingerprint at the chosen sub-index
-                let evicted = self
-                    .read_bucket(index, Ordering::Relaxed)
-                    .nth(sub_index)
-                    .unwrap();
-                evictions.push((index, sub_index, fingerprint));
-                // Find the alternative index for the evicted fingerprint
-                index = self.alt_index(index, evicted);
-                fingerprint = evicted;
-            } else {
+            if self.insert_at_index(index, fingerprint).is_ok() {
                 // Successfully inserted the fingerprint, now apply all evictions
                 lock.upgrade();
                 while let Some((index, sub_index, evicted)) = evictions.pop() {
@@ -604,6 +569,28 @@ impl<H: Hasher + Default> CuckooFilter<H> {
                 }
                 return Ok(());
             }
+
+            let sub_indices = used_indices.entry(index).or_insert(0usize);
+            let sub_index = if *sub_indices == 0 {
+                // First time seeing this index, randomly choose a sub-index
+                rng.random_range(0..self.bucket_size)
+            } else {
+                // Find an unused sub-index
+                (0..self.bucket_size)
+                    .find(|shift| (*sub_indices >> shift) & 1 == 0)
+                    .ok_or(Error::NotEnoughSpace)?
+            };
+            *sub_indices |= 1 << sub_index;
+
+            // Evict the fingerprint at the chosen sub-index
+            let evicted = self
+                .read_bucket(index, Ordering::Relaxed)
+                .nth(sub_index)
+                .unwrap();
+            evictions.push((index, sub_index, fingerprint));
+            // Find the alternative index for the evicted fingerprint
+            index = self.alt_index(index, evicted);
+            fingerprint = evicted;
         }
         // Reached the maximum number of evictions, give up
         Err(Error::NotEnoughSpace)
@@ -631,7 +618,7 @@ impl<H: Hasher + Default> CuckooFilter<H> {
     /// and reads can proceed even during writes (though they might see
     /// intermediate states that get resolved by retry logic).
     ///
-    /// Returns an Iterator over the fingerprints in the bucket, possibly empty.
+    /// Returns an Iterator over the fingerprints in the bucket, (0 = empty slot).
     fn read_bucket(&self, index: usize, ordering: Ordering) -> impl Iterator<Item = usize> {
         let fingerprint_index = index * self.bucket_size;
         let bit_index = fingerprint_index * self.fingerprint_size;
