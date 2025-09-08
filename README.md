@@ -210,20 +210,20 @@ cargo bench
 Basic (single-threaded):
 
 ```
-contains_false                          ~ 60.7 ns/iter
-contains_true                           ~ 39.9 ns/iter
-contains_with_max_evictions_0           ~ 32.6 ns/iter
-insert_and_remove                       ~ 171.4 ns/iter
-insert_and_remove_with_max_evictions_0  ~ 106.8 ns/iter
-insert_into_full_filter                 ~ 39.7 µs/iter
-insert_unique                           ~ 40.7 ns/iter
+contains_false                          ~ 39.36 ns/iter
+contains_true                           ~ 24.60 ns/iter
+contains_with_max_evictions_0           ~ 20.37 ns/iter
+insert_and_remove                       ~ 111.66 ns/iter
+insert_and_remove_with_max_evictions_0  ~ 68.10 ns/iter
+insert_into_full_filter                 ~ 27.20 µs/iter
+insert_unique                           ~ 25.10 ns/iter
 ```
 
 Concurrent (multi-threaded):
 
 ```
-concurrent_contains                         ~ 106.7 ns/iter (+/- 79.4)
-concurrent_contains_under_write_contention  ~ 205.6 ns/iter (+/- 23.6)
+concurrent_contains                         ~ 36.93 ns/iter
+concurrent_contains_under_write_contention  ~ 138.05 ns/iter
 ```
 
 Comparison suite:
@@ -231,13 +231,13 @@ Comparison suite:
 This suite uses the reference [cuckoofilter](https://crates.io/crates/cuckoofilter) crate (dev-dependency `cuckoofilter = "0.5"`) as the baseline for comparison.
 
 ```
-concurrent_contains                         ~ 4.23 µs/iter (+/- 8.01)
-concurrent_contains_under_write_contention  ~ 3.19 µs/iter (+/- 0.93)
-contains_false                              ~ 22.3 ns/iter
-contains_true                               ~ 42.1 ns/iter
-insert_and_remove                           ~ 131.3 ns/iter
-insert_into_full_filter                     ~ 26.1 µs/iter
-insert_unique                               ~ 42.5 ns/iter
+concurrent_contains                         ~ 3.34 µs/iter
+concurrent_contains_under_write_contention  ~ 2.49 µs/iter
+contains_false                              ~ 14.31 ns/iter
+contains_true                               ~ 26.78 ns/iter
+insert_and_remove                           ~ 83.70 ns/iter
+insert_into_full_filter                     ~ 16.63 µs/iter
+insert_unique                               ~ 27.15 ns/iter
 ```
 
 ## Safety and Guarantees
