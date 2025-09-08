@@ -30,7 +30,7 @@ Add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-atomic-cuckoo-filter = "0.1"
+atomic-cuckoo-filter = "0.2"
 ```
 
 ### Basic Usage
