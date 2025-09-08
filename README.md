@@ -20,7 +20,7 @@ atomic operations and is designed for high-concurrency environments.
 🔍 **No False Negatives**: Items that were inserted are guaranteed to be found  
 🎯 **Controllable False Positives**: Configurable fingerprint size to tune accuracy  
 📦 **Space Efficient**: ~20-30% less memory usage than Bloom filters for the same false positive rate  
-🗑️ **Deletion Support**: Unlike Bloom filters, inserted items can be safely removed
+🗑️ **Deletion Support**: Unlike Bloom filters, inserted items can be safely removed  
 ⏱️ **Bounded Lookup Time**: Always at most 2 bucket checks maximum  
 🔧 **Highly Configurable**: Customizable capacity, fingerprint size, bucket size, and eviction limits  
 

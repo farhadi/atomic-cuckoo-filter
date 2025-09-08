@@ -5,7 +5,7 @@
 
 use derive_builder::Builder;
 use rand::Rng;
-use std::collections::HashMap;
+use std::collections::HashSet;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::hint;
@@ -282,10 +282,6 @@ where
     #[builder(setter(skip))]
     num_buckets: usize,
 
-    /// Number of atomic values per bucket
-    #[builder(setter(skip))]
-    atomics_per_bucket: usize,
-
     /// Bit mask for extracting fingerprints
     #[builder(setter(skip))]
     fingerprint_mask: usize,
@@ -514,12 +510,10 @@ impl<H: Hasher + Default> CuckooFilter<H> {
     /// Returns Ok(()) if successful, Err(Error::NotEnoughSpace) if the bucket is full
     fn insert_at_index(&self, index: usize, fingerprint: usize) -> Result<(), Error> {
         loop {
-            let Some(sub_index) = self
+            let sub_index = self
                 .read_bucket(index, Ordering::Relaxed)
                 .position(|i| i == 0)
-            else {
-                return Err(Error::NotEnoughSpace);
-            };
+                .ok_or(Error::NotEnoughSpace)?;
 
             if self.update_bucket(index, sub_index, 0, fingerprint, Ordering::Release) {
                 return Ok(());
@@ -557,40 +551,38 @@ impl<H: Hasher + Default> CuckooFilter<H> {
         mut lock: Lock,
     ) -> Result<(), Error> {
         let mut rng = rand::rng();
-        let mut evictions = Vec::with_capacity(self.max_evictions.min(32));
-        let mut used_indices = HashMap::with_capacity(self.max_evictions.min(32));
-        while evictions.len() <= self.max_evictions {
-            if self.insert_at_index(index, fingerprint).is_ok() {
-                // Successfully inserted the fingerprint, now apply all evictions
-                lock.upgrade();
-                while let Some((index, sub_index, evicted)) = evictions.pop() {
-                    self.update_bucket(index, sub_index, fingerprint, evicted, Ordering::Relaxed);
-                    fingerprint = evicted;
-                }
-                return Ok(());
+        let mut insertions = Vec::with_capacity(self.max_evictions.min(32));
+        let mut used_slots = HashSet::with_capacity(self.max_evictions.min(32));
+        while insertions.len() <= self.max_evictions {
+            // Choose a sub-index in this bucket whose global slot has not been used yet in the plan
+            let base_slot = index * self.bucket_size;
+            let mut sub_index = rng.random_range(0..self.bucket_size);
+            if used_slots.contains(&(base_slot + sub_index)) {
+                sub_index = (0..self.bucket_size)
+                    .find(|&i| !used_slots.contains(&(base_slot + i)))
+                    .ok_or(Error::NotEnoughSpace)?;
             }
-
-            let sub_indices = used_indices.entry(index).or_insert(0usize);
-            let sub_index = if *sub_indices == 0 {
-                // First time seeing this index, randomly choose a sub-index
-                rng.random_range(0..self.bucket_size)
-            } else {
-                // Find an unused sub-index
-                (0..self.bucket_size)
-                    .find(|shift| (*sub_indices >> shift) & 1 == 0)
-                    .ok_or(Error::NotEnoughSpace)?
-            };
-            *sub_indices |= 1 << sub_index;
+            used_slots.insert(base_slot + sub_index);
+            insertions.push((index, sub_index, fingerprint));
 
             // Evict the fingerprint at the chosen sub-index
-            let evicted = self
+            fingerprint = self
                 .read_bucket(index, Ordering::Relaxed)
                 .nth(sub_index)
                 .unwrap();
-            evictions.push((index, sub_index, fingerprint));
             // Find the alternative index for the evicted fingerprint
-            index = self.alt_index(index, evicted);
-            fingerprint = evicted;
+            index = self.alt_index(index, fingerprint);
+
+            if self.insert_at_index(index, fingerprint).is_ok() {
+                // Successfully inserted the fingerprint, now apply all evictions
+                lock.upgrade();
+                let mut evicted = fingerprint;
+                while let Some((index, sub_index, fingerprint)) = insertions.pop() {
+                    self.update_bucket(index, sub_index, evicted, fingerprint, Ordering::Relaxed);
+                    evicted = fingerprint;
+                }
+                return Ok(());
+            }
         }
         // Reached the maximum number of evictions, give up
         Err(Error::NotEnoughSpace)
@@ -625,9 +617,8 @@ impl<H: Hasher + Default> CuckooFilter<H> {
         let start_index = bit_index / usize::BITS as usize;
         let skip_bits = bit_index % usize::BITS as usize;
         let skip_fingerprints = skip_bits >> self.fingerprint_size.trailing_zeros();
-        let end_index = start_index + self.atomics_per_bucket;
-
-        self.buckets[start_index..end_index]
+        // No need to calculate end_index; just iterate from start_index to the end of the bucket
+        self.buckets[start_index..]
             .iter()
             .flat_map(move |atomic| {
                 let atomic_value = atomic.load(ordering);
@@ -811,10 +802,6 @@ impl<H: Hasher + Default> CuckooFilterBuilder<H> {
         cuckoo_filter.capacity = cuckoo_filter.num_buckets * cuckoo_filter.bucket_size;
         // Calculate the fingerprint mask
         cuckoo_filter.fingerprint_mask = ((1u64 << cuckoo_filter.fingerprint_size) - 1) as usize;
-        // Calculate the size of a bucket in bits
-        let bucket_bit_size = cuckoo_filter.bucket_size * cuckoo_filter.fingerprint_size;
-        // Calculate the number of atomic values per bucket
-        cuckoo_filter.atomics_per_bucket = bucket_bit_size.div_ceil(usize::BITS as usize);
         // Calculate the number of fingerprints per atomic value
         cuckoo_filter.fingerprints_per_atomic =
             usize::BITS as usize / cuckoo_filter.fingerprint_size;

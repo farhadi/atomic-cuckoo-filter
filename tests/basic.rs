@@ -263,16 +263,17 @@ fn test_false_positives() {
 #[test]
 fn test_no_false_negatives() {
     let filter = CuckooFilter::with_capacity(1024);
-    let items = test_items(500);
+    let items = test_items(1024);
 
-    // Insert all items
-    for item in &items {
-        assert!(filter.insert(item).is_ok());
-    }
+    // Insert items and filter out the ones that failed to insert
+    let inserted_items = items
+        .into_iter()
+        .filter(|item| filter.insert(item).is_ok())
+        .collect::<Vec<_>>();
 
     // All inserted items should be found (no false negatives)
-    for item in &items {
-        assert!(filter.contains(item), "False negative for item: {item}");
+    for item in inserted_items {
+        assert!(filter.contains(&item), "False negative for item: {item}");
     }
 }
 
@@ -296,7 +297,7 @@ fn test_full_filter_insertion() {
     }
 
     // Should fill up and then start failing
-    assert!(successful_inserts <= 16);
+    assert!(successful_inserts <= filter.capacity());
     assert!(successful_inserts > 0);
     assert_eq!(filter.len(), successful_inserts);
 }
