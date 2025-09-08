@@ -269,6 +269,10 @@ where
     #[builder(default = "4")]
     bucket_size: usize,
 
+    /// Number of overlapping slots between consecutive buckets (0 = no overlap)
+    #[builder(default = "0")]
+    overlap: usize,
+
     /// Maximum number of evictions to try before giving up
     #[builder(default = "500")]
     max_evictions: usize,
@@ -281,6 +285,10 @@ where
     /// Number of buckets in the filter (power of 2)
     #[builder(setter(skip))]
     num_buckets: usize,
+
+    /// Stride between the start indices of consecutive buckets in slots (bucket_size - overlap)
+    #[builder(setter(skip))]
+    bucket_stride: usize,
 
     /// Bit mask for extracting fingerprints
     #[builder(setter(skip))]
@@ -478,6 +486,7 @@ impl<H: Hasher + Default> CuckooFilter<H> {
     /// 2. Distinctness: For any fingerprint, the two indices are always different.
     /// 3. Uniformity: The mapping distributes fingerprints evenly across all buckets.
     fn alt_index(&self, index: usize, fingerprint: usize) -> usize {
+        // Standard xor-based alternate index, confined to bucket index space
         index ^ (self.hash(&fingerprint) as usize & (self.num_buckets - 1))
     }
 
@@ -612,7 +621,7 @@ impl<H: Hasher + Default> CuckooFilter<H> {
     ///
     /// Returns an Iterator over the fingerprints in the bucket, (0 = empty slot).
     fn read_bucket(&self, index: usize, ordering: Ordering) -> impl Iterator<Item = usize> {
-        let fingerprint_index = index * self.bucket_size;
+        let fingerprint_index = index * self.bucket_stride;
         let bit_index = fingerprint_index * self.fingerprint_size;
         let start_index = bit_index / usize::BITS as usize;
         let skip_bits = bit_index % usize::BITS as usize;
@@ -664,7 +673,8 @@ impl<H: Hasher + Default> CuckooFilter<H> {
         new_value: usize,
         ordering: Ordering,
     ) -> bool {
-        let bit_index = (index * self.bucket_size + sub_index) * self.fingerprint_size;
+        // Target position within packed storage honoring bucket stride
+        let bit_index = (index * self.bucket_stride + sub_index) * self.fingerprint_size;
         let atomic_index = bit_index / usize::BITS as usize;
         let skip_bits = bit_index % usize::BITS as usize;
         let shift = usize::BITS as usize - self.fingerprint_size - skip_bits;
@@ -784,6 +794,11 @@ impl<H: Hasher + Default> CuckooFilterBuilder<H> {
         if self.bucket_size == Some(0) {
             return Err("bucket_size must be greater than zero".into());
         }
+        if let (Some(bucket_size), Some(overlap)) = (self.bucket_size, self.overlap)
+            && overlap >= bucket_size
+        {
+            return Err("overlap must be less than bucket_size".into());
+        }
         if self.capacity == Some(0) {
             return Err("capacity must be greater than zero".into());
         }
@@ -793,13 +808,23 @@ impl<H: Hasher + Default> CuckooFilterBuilder<H> {
     /// Build a CuckooFilter with the specified configuration
     pub fn build(self) -> Result<CuckooFilter<H>, CuckooFilterBuilderError> {
         let mut cuckoo_filter = self.base_build()?;
-        // Calculate the number of buckets (power of 2)
+        // Compute stride in number of fingerprint slots
+        cuckoo_filter.bucket_stride = cuckoo_filter
+            .bucket_size
+            .saturating_sub(cuckoo_filter.overlap);
+        if cuckoo_filter.bucket_stride == 0 {
+            // Degenerate: full overlap not allowed by validate, but guard anyway
+            cuckoo_filter.bucket_stride = 1;
+        }
+        // Calculate the number of buckets (power of 2) based on stride addressing
         cuckoo_filter.num_buckets = cuckoo_filter
             .capacity
-            .div_ceil(cuckoo_filter.bucket_size)
+            .div_ceil(cuckoo_filter.bucket_stride)
             .next_power_of_two();
-        // Adjust the capacity to match the actual number of buckets
-        cuckoo_filter.capacity = cuckoo_filter.num_buckets * cuckoo_filter.bucket_size;
+        // Adjust the effective capacity to match actual number of buckets and stride
+        cuckoo_filter.capacity = cuckoo_filter.num_buckets * cuckoo_filter.bucket_stride
+            + cuckoo_filter.bucket_size
+            - cuckoo_filter.bucket_stride;
         // Calculate the fingerprint mask
         cuckoo_filter.fingerprint_mask = ((1u64 << cuckoo_filter.fingerprint_size) - 1) as usize;
         // Calculate the number of fingerprints per atomic value
