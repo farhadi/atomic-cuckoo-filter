@@ -1,5 +1,7 @@
 use ahash::AHasher;
-use atomic_cuckoo_filter::{CuckooFilter, CuckooFilterBuilder};
+use atomic_cuckoo_filter::{CuckooFilter, CuckooFilterBuilder, DeserializeError};
+use std::collections::hash_map::DefaultHasher;
+use serde_json;
 // Helper function to create test data
 fn test_items(count: usize) -> Vec<String> {
     (0..count).map(|i| format!("test_item_{i}")).collect()
@@ -194,6 +196,70 @@ fn test_clear() {
     for item in &items {
         assert!(!filter.contains(item));
     }
+}
+
+#[test]
+fn test_serialize_and_deserialize() {
+    let filter = CuckooFilter::builder()
+        .capacity(512)
+        .fingerprint_size(8)
+        .bucket_size(4)
+        .max_evictions(50)
+        .build()
+        .unwrap();
+
+    for item in &test_items(50) {
+        assert!(filter.insert(item).is_ok());
+    }
+
+    let serialized = filter.to_bytes();
+    let restored =
+        CuckooFilter::<DefaultHasher>::from_bytes(&serialized).expect("should deserialize");
+
+    assert_eq!(restored.capacity(), filter.capacity());
+    assert_eq!(restored.len(), filter.len());
+
+    for item in &test_items(50) {
+        assert!(restored.contains(item));
+    }
+}
+
+#[test]
+fn test_serde_json_roundtrip() {
+    let filter = CuckooFilter::builder()
+        .capacity(128)
+        .fingerprint_size(8)
+        .bucket_size(4)
+        .max_evictions(10)
+        .build()
+        .unwrap();
+
+    for item in &test_items(20) {
+        assert!(filter.insert(item).is_ok());
+    }
+
+    let json = serde_json::to_string(&filter).expect("serialize to json");
+    let restored: CuckooFilter<DefaultHasher> =
+        serde_json::from_str(&json).expect("deserialize from json");
+
+    assert_eq!(restored.capacity(), filter.capacity());
+    assert_eq!(restored.len(), filter.len());
+
+    for item in &test_items(20) {
+        assert!(restored.contains(item));
+    }
+}
+
+#[test]
+fn test_deserialize_invalid_header() {
+    let bytes = vec![0u8; 10];
+    let error = CuckooFilter::<DefaultHasher>::from_bytes(&bytes).unwrap_err();
+    assert_eq!(error, DeserializeError::InvalidLength);
+
+    let mut serialized = CuckooFilter::new().to_bytes();
+    serialized[0] = b'X';
+    let error = CuckooFilter::<DefaultHasher>::from_bytes(&serialized).unwrap_err();
+    assert_eq!(error, DeserializeError::InvalidHeader);
 }
 
 #[test]
