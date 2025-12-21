@@ -10,7 +10,6 @@ use std::hint;
 use std::marker::PhantomData;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use bincode;
 use derive_builder::Builder;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
