@@ -1,7 +1,7 @@
 use ahash::AHasher;
 use atomic_cuckoo_filter::{CuckooFilter, CuckooFilterBuilder, DeserializeError};
-use std::collections::hash_map::DefaultHasher;
 use serde_json;
+use std::collections::hash_map::DefaultHasher;
 // Helper function to create test data
 fn test_items(count: usize) -> Vec<String> {
     (0..count).map(|i| format!("test_item_{i}")).collect()

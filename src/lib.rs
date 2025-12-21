@@ -906,8 +906,7 @@ where
         D: serde::Deserializer<'de>,
     {
         let serialized = SerializableFilter::deserialize(deserializer)?;
-        Self::from_serializable(serialized)
-            .map_err(|err| serde::de::Error::custom(err.to_string()))
+        Self::from_serializable(serialized).map_err(|err| serde::de::Error::custom(err.to_string()))
     }
 }
 
