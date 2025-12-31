@@ -3,8 +3,6 @@
 // with better space efficiency than Bloom filters, support for deletions, and
 // fully concurrent operations using atomic operations and lock-free algorithms.
 
-use derive_builder::Builder;
-use rand::Rng;
 use std::collections::HashSet;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
@@ -12,10 +10,20 @@ use std::hint;
 use std::marker::PhantomData;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use derive_builder::Builder;
+use rand::Rng;
+use serde::{Deserialize, Serialize};
+
 /// Maximum number of spin-loop iterations before parking a thread.
 /// This balances CPU usage vs. latency - spinning avoids kernel calls for
 /// short waits, but we park threads to avoid wasting CPU on long waits.
 const MAX_SPIN: usize = 100;
+
+/// Magic bytes used to identify serialized filters
+const SERIALIZATION_MAGIC: &[u8; 4] = b"ACF1";
+
+/// Current serialization format version
+const SERIALIZATION_VERSION: u8 = 1;
 
 /// Error type for Cuckoo Filter insert operation
 #[derive(Debug, thiserror::Error, PartialEq)]
@@ -23,6 +31,38 @@ pub enum Error {
     /// Returned when the filter is full and cannot accommodate more elements
     #[error("Not enough space to store this item.")]
     NotEnoughSpace,
+}
+
+/// Error type for deserializing a Cuckoo Filter from bytes
+#[derive(Debug, thiserror::Error, PartialEq)]
+pub enum DeserializeError {
+    /// The provided byte slice does not start with the expected magic prefix
+    #[error("Invalid serialized data header")]
+    InvalidHeader,
+    /// The serialized data does not contain the expected amount of bytes
+    #[error("Serialized data has an unexpected length")]
+    InvalidLength,
+    /// The serialized data encodes an unsupported version
+    #[error("Unsupported serialization version: {0}")]
+    UnsupportedVersion(u8),
+    /// The serialized data encodes an invalid or unsupported configuration
+    #[error("Invalid configuration: {0}")]
+    InvalidConfiguration(String),
+    /// A numeric value in the serialized data cannot be represented on this platform
+    #[error("Serialized value is out of range for this platform")]
+    ValueOutOfRange,
+}
+
+#[derive(Serialize, Deserialize)]
+struct SerializableFilter {
+    magic: [u8; 4],
+    version: u8,
+    fingerprint_size: u32,
+    bucket_size: u32,
+    max_evictions: u32,
+    capacity: u64,
+    counter: u64,
+    buckets: Vec<u64>,
 }
 
 /// Types of locks that can be acquired on the filter
@@ -417,6 +457,104 @@ impl<H: Hasher + Default> CuckooFilter<H> {
         self.capacity
     }
 
+    /// Serialize the filter into a byte vector.
+    ///
+    /// The serialized format is versioned and includes the filter configuration,
+    /// element count, and all bucket contents. A FullyExclusive lock is acquired
+    /// (when supported) to guarantee a consistent snapshot.
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let serializable = self.to_serializable();
+
+        bincode::serialize(&serializable).expect("Serialization should not fail")
+    }
+
+    fn to_serializable(&self) -> SerializableFilter {
+        let _lock = self.lock(LockKind::FullyExclusive);
+        SerializableFilter {
+            magic: *SERIALIZATION_MAGIC,
+            version: SERIALIZATION_VERSION,
+            fingerprint_size: self.fingerprint_size as u32,
+            bucket_size: self.bucket_size as u32,
+            max_evictions: self.max_evictions as u32,
+            capacity: self.capacity as u64,
+            counter: self.counter.load(Ordering::Acquire) as u64,
+            buckets: self
+                .buckets
+                .iter()
+                .map(|atomic| atomic.load(Ordering::Acquire) as u64)
+                .collect(),
+        }
+    }
+
+    fn from_serializable(serialized: SerializableFilter) -> Result<Self, DeserializeError> {
+        if serialized.magic != *SERIALIZATION_MAGIC {
+            return Err(DeserializeError::InvalidHeader);
+        }
+
+        if serialized.version != SERIALIZATION_VERSION {
+            return Err(DeserializeError::UnsupportedVersion(serialized.version));
+        }
+
+        let fingerprint_size: usize = serialized
+            .fingerprint_size
+            .try_into()
+            .map_err(|_| DeserializeError::ValueOutOfRange)?;
+        let bucket_size: usize = serialized
+            .bucket_size
+            .try_into()
+            .map_err(|_| DeserializeError::ValueOutOfRange)?;
+        let max_evictions: usize = serialized
+            .max_evictions
+            .try_into()
+            .map_err(|_| DeserializeError::ValueOutOfRange)?;
+        let capacity: usize = serialized
+            .capacity
+            .try_into()
+            .map_err(|_| DeserializeError::ValueOutOfRange)?;
+        let counter: usize = serialized
+            .counter
+            .try_into()
+            .map_err(|_| DeserializeError::ValueOutOfRange)?;
+        let atomic_len = serialized.buckets.len();
+
+        if counter > capacity {
+            return Err(DeserializeError::InvalidConfiguration(
+                "Serialized element count exceeds capacity".into(),
+            ));
+        }
+
+        let filter = CuckooFilterBuilder::<H>::default()
+            .capacity(capacity)
+            .fingerprint_size(fingerprint_size)
+            .bucket_size(bucket_size)
+            .max_evictions(max_evictions)
+            .build()
+            .map_err(|err| DeserializeError::InvalidConfiguration(err.to_string()))?;
+
+        if filter.buckets.len() != atomic_len {
+            return Err(DeserializeError::InvalidLength);
+        }
+
+        filter.counter.store(counter, Ordering::Release);
+
+        for (atomic, value) in filter.buckets.iter().zip(serialized.buckets.into_iter()) {
+            let value: usize = value
+                .try_into()
+                .map_err(|_| DeserializeError::ValueOutOfRange)?;
+            atomic.store(value, Ordering::Release);
+        }
+
+        Ok(filter)
+    }
+
+    /// Deserialize a filter from the provided byte slice.
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, DeserializeError> {
+        let serialized: SerializableFilter =
+            bincode::deserialize(bytes).map_err(|_| DeserializeError::InvalidLength)?;
+
+        Self::from_serializable(serialized)
+    }
+
     /// Clear the filter, removing all elements
     pub fn clear(&self) {
         let _lock = self.lock(LockKind::WriterExclusive);
@@ -746,6 +884,28 @@ impl<H: Hasher + Default> CuckooFilter<H> {
                 return result;
             }
         }
+    }
+}
+
+impl<H: Hasher + Default> Serialize for CuckooFilter<H> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        self.to_serializable().serialize(serializer)
+    }
+}
+
+impl<'de, H> Deserialize<'de> for CuckooFilter<H>
+where
+    H: Hasher + Default,
+{
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let serialized = SerializableFilter::deserialize(deserializer)?;
+        Self::from_serializable(serialized).map_err(|err| serde::de::Error::custom(err.to_string()))
     }
 }
 
